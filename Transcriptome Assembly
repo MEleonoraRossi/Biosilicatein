@@ -1,0 +1,241 @@
+#STEPS FOR TRANSCRIPTOME ASSEMBLY AND DIFFERENTIAL EXPRESSION ANALYSIS
+
+#1. ASSESSMENT OF QUALITY OF THE READS
+
+#-Run FASTQC to asses the quality of the reads:
+fastqc reads.fastq.gz
+
+#2. FILTERING OF READS USING TRIMMOMATIC
+-Depending on quality, filter with TRIMMOMATIC:
+
+java -jar /usr/local/src/Trimmomatic/Trimmomatic-0.32/trimmomatic-0.32.jar PE  -threads 4 -phred33 -trimlog TrimlogBACC1 Dendrilla_706_R1.fastq.gz Dendrilla_706_R2.fastq.gz Cliona_BAC_C1_R1_paired.fq Cliona_BAC_C1_R1_unpaired.fq Cliona_BAC_C1_R2_paired.fq Cliona_BAC_C1_R2_unpaired.fq ILLUMINACLIP:/home/ana/Adapters/adaptor15.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:28 MINLEN:36
+
+#-EXPLANATION:
+LEADING:3 —> Remove leading low quality or N bases (below quality 3) 
+TRAILING:3 —>Remove trailing low quality or N bases (below quality 3) 
+SLIDINGWINDOW_4_28 —> Scan the read with a 4-base wide sliding window, cutting when the average quality per base drops below 28 (change this 28 for whatever number you want to put the cut off threshold) 
+MINLEN:36 —> Drop reads which are less than 36 bases long after these steps
+
+#You could also do ILLUMINACLIP::TruSeq3-PE.fa:2:30:10 —>  Remove Illumina adapters provided in the TruSeq3-PE.fa file (provided). Initially Trimmomatic will look for seed matches (16 bases) allowing maximally 2 mismatches. These seeds will be extended and clipped if in the case of paired end reads a score of 30 is reached (about 50 bases), or in the case of single ended reads a score of 10, (about 17 bases). 
+
+#INPUT FILES: 
+For input files, either of the following can be used: 
+Explicitly naming the 2 input files 
+Naming the forward file using the -basein flag, where the reverse file can be determined automatically. The second file is determined by looking for common patterns of file naming, and changing the appropriate character to reference the reverse file. Examples which should be correctly handled include: 
+Sample_Name_R1_001.fq.gh -> Sample_Name_R2_001.fq.gz 
+Sample_Name.f.fastq -> Sample_Name.r.fastq 
+Sample_Name.1.sequence.txt -> Sample_Name.2.sequence.txt
+
+#OUTPUT FILES:
+Providing a base file name using the –baseout flag, from which the 4 output files can be derived. 
+If the name “mySampleFiltered.fq.gz” is provided, the following 4 file names will be used:
+mySampleFiltered_1P.fq.gz - for paired forward reads 
+mySampleFiltered_1U.fq.gz - for unpaired forward reads 
+mySampleFiltered_2P.fq.gz - for paired reverse reads 
+mySampleFiltered_2U.fq.gz - for unpaired reverse reads
+
+#3. Once you have the trimmed reads (paired and paired), assemble the transcriptome using TRINITY:
+
+-OPTION A: Normal trinity with just paired-end reads, it uses the latest version 2.4.0:
+
+Trinity --normalize_reads --seqType fq --max_memory 100G --left 10_S2_R1_paired.fastq,18_S3_R1_paired.fastq,46a_S4_R1_paired.fastq,8_S1_R1_paired.fastq --right 10_S2_R2_paired.fastq,18_S3_R2_paired.fastq,46a_S4_R2_paired.fastq,8_S1_R2_paired.fastq --output trinity_Hpaniceapre --CPU 8 --full_cleanup --inchworm_cpu 8 --bflyHeapSpaceMax 15G --bflyCalculateCPU 
+
+-OPTION B: Trinity with paired-end reads and single-end reads (unpaired from trimming or single end sequencing), it uses version 2.2.0:  
+
+perl /usr/local/src/Trinity/trinityrnaseq-2.2.0/Trinity --normalize_reads --seqType fq --max_memory 128G --left  ./1_R1.fq.gz,./2_R1.fq.gz --right ./1_R2.fq.gz,./2_R2.fq.gz --single ./1unpaired.fq.gz,./2unpaired.fq.gz --output trinity_assembly --CPU 8 --full_cleanup --inchworm_cpu 8 --bflyHeapSpaceMax 15G --bflyCalculateCPU  
+
+#Make sure you put trinity in the output as a safety measure.
+
+4. ASSESSMENT OF THE QUALITY OF YOUR TRANSCRIPTOME:
+-To obtain the number of reads used to construct the assembly:
+
+#first 
+
+bowtie2-build /home/ana/RNASeq/AR_121016/VILLUM/CONCATENATED/Trinity/PRUEBA/Halichondria_panicea_trinity_preliminar.fasta Hpan.trinity.fasta  
+
+<bowtie2-build /HOME/input.fasta output.fasta>
+
+#after
+
+bowtie2 --local --no-unal -x Hpan.trinity.fasta -q -1 /home/ana/RNASeq/AR_121016/VILLUM/CONCATENATED/Trinity/PRUEBA/10_S2_R1_paired.fastq,18_S3_R1_paired.fastq,46a_S4_R1_paired.fastq,8_S1_R1_paired.fastq -2 /home/ana/RNASeq/AR_121016/VILLUM/CONCATENATED/Trinity/PRUEBA/10_S2_R2_paired.fastq,18_S3_R2_paired.fastq,46a_S4_R2_paired.fastq,8_S1_R2_paired.fastq \
+     | samtools view -Sb - | samtools sort -no - - > bowtie2.nameSorted.bam
+
+#Then run:
+
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/util/SAM_nameSorted_to_uniq_count_stats.pl bowtie2.nameSorted.bam
+
+#and you will get :
+
+#read_type      count   pct
+proper-pairs  28730723        100.00
+
+Total aligned rnaseq fragments: 28730723
+
+
+#To obtain basic stats of the assembly: N50, etc:
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/util/TrinityStats.pl Halichondria_panicea_trinity_preliminar.fasta
+
+5. FILTER THE BACTERIA OUT FROM YOUR ASSEMBLY USING BLOBTOOLS:
+#blobtools- follow instructions on  https://blobtools.readme.io/ (website is unner matenace at the momnent)
+# input files for blobtools:
+# assembly file in fasta format
+# bam file
+# blast annotation
+# names.dmp
+# nodes.dmp
+
+# Command I used to create the bam file:
+bowtie2 -p 24 --local --no-unal -x trinity_petrosia_complete_short_names.fasta \
+-q -1 /path/read_paired.R1.fastq.gz,/path/read_paired.R2.fastq.gz, \
+| samtools view -Sb - | samtools sort -no - - >  trinity_petrosia_complete_short_names.fasta.nameSorted.bam
+
+# Command I used to create the blast file:
+
+blastn -task megablast -query /db/ana/programs/blobology/trinity_petrosia_complete_short_names.fasta \
+-db /dh/blastdb/nt -evalue 0.01 -num_threads 8 -max_target_seqs 5 -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
+-out blobtools_trinity_petrosia_complete_short_names.nt.0.01.megablast
+
+#download the taxdump (will contain names.dmp and nodes.dmp)
+wget ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz
+#untar it
+tar xzf taxdump.tar.gz
+
+# If the blobcreate command cannot accept you bam file, you can convert it to a covarage file using this command:
+blobtools map2cov -i /db/ana/programs/blobology/trinity_petrosia_complete_short_names.fasta -s trinity_petrosia_complete_short_names.fasta.readsname.bowtie2.bam.sam -o out
+
+# use the b flag if you are using bam file, or c flag if using a covarge file
+blobtools create \
+-i trinity_petrosia_complete_short_names.fasta \
+-b trinity_petrosia_complete_short_names.fasta.nameSorted.bam \
+-t blobtools_trinity_petrosia_complete_short_names.nt.0.01.megablast \
+--names ../names.dmp \
+--nodes ../nodes.dmp
+
+blobtools view \
+  -i blobDB.json \
+  -o petrosia_blob
+
+#check that you contigs have taxonomical annotation
+grep '^##' petrosia_blob.blobDB.table.txt ; \
+  grep -v '^##' petrosia_blob.blobDB.table.txt | \
+  column -t -s $'\t'
+
+#Create the blobplot
+./blobtools blobplot \
+  -i blobDB.json \
+  -o petrosia_blob_plot
+  
+  
+# I used the petrosia_blob.blobDB.table.txt to identify the contigs with GC covarage <0.5 (using excel) and then saved the names in .txt file
+#filter contigs:
+perl extractseqfromfasta.pl trinity_petrosia_complete_short_names.fasta list "petrosia_tokeep.txt" > trinity_petrosia_complete_short_names_blobfiltered.fasta
+
+#the contig list should have the ">" in each contig name
+
+
+#blobtools can also filter fastq files, use i or e flags with contigs to include or exclude 
+blobtools bamfilter \
+-b trinity_petrosia_complete_short_names.fasta.nameSorted.bam \
+-i petrosia_tokeep2.txt'
+
+6. OBTAIN FUNCTIONAL ANNOTATIONS FOR THE TRANSCRIPTS:
+HOW TO BLAST IN THE SERVERS NHM:
+#ONE WAY
+-Make sure you work in CTAG because that is where the database is. If you have to make a database follow the next steps:
+
+-Download the database for Metazoa proteins  
+NCBI--> proteins--> alldatabases--> change prot and to search txid33208[ORGN] --> search--> send to file --> GI list download 
+
+#It will create a file called sequence.gi
+
+-Then transfer sequence.gi to the cluster in ctag: example to /dg/vassia 
+ 
+-then prepare the database: 
+blastdb_aliastool -gilist sequence.gi -db /dh/blastdb/refseq_protein -out refseqprot_metazoa -title refseqprot_metazoa 
+
+#It takes out the metazoan proteins contained in the sequence.gi list from the refseqprot database of ncbi, and creates a database for all metazoans called refseqprot_metazoa that will be used for blast.
+
+-Sometimes trinity output files contain very large contig IDs and blast can have a hard time reading them, so it ignores those contigs. To shorten the contig IDs do:
+
+awk '{print $1}' Ephydatia_transcriptome_trinity.fasta > Ephydatia_transcriptome_trinity_short.fasta
+
+
+-If your transcriptome is very large, split it in several files containing less sequences. Follow the following example using a perl script from SCRIPTOME (http://archive.sysbio.harvard.edu/csb/resources/computational/scriptome/UNIX/):
+
+perl -e ' $split_seqs=50000; $out_template="Ephy_NUMBER.fasta"; $count=0; $filenum=0; $len=0; while (<>) { s/\r?\n//; if (/^>/) { if ($count % $split_seqs == 0) { $filenum++; $filename = $out_template; $filename =~ s/NUMBER/$filenum/g; if ($filenum > 1) { close SHORT } open (SHORT, ">$filename") or die $!; } $count++; } else { $len += length($_) } print SHORT "$_\n"; } close(SHORT); warn "\nSplit $count FASTA records in $. lines, with total sequence length $len\nCreated $filenum files like $filename\n\n"; ' Ephydatia_transcriptome_trinity_short.fasta 
+
+#This will create 5 files with the names: Ephy_1.fasta, Ephy_2.fasta, etc.
+
+-Blast each file separately. Make sure you do screen in your terminal before doing this:
+Example: 
+
+blastx -query Ephy_5.fasta -db /dg/ana/refseqprot_metazoa -evalue 1e-5 -out Ephy_5.xml &
+
+
+#ALTERNATIVE WAY USING DIAMOND
+
+Blast command:
+blastp -query All_Tarantula_prot_out.fa -db /dh/blastdb/refseq_protein -evalue 0.001 -out BlastPTarantula.xml -num_threads 8 -max_target_seqs 1 -outfmt 5
+
+Diamond command:
+diamond blastp --query All_Tarantula_prot_out.fa --db /dg/nr-diamond-2018-03-05/nr --evalue 0.001 --out Tarantula_diamond.xml --threads 8 --max-target-seqs 1 --outfmt 5
+
+For blasts use this:
+diamond blastx --query Hpan_1.fasta --db /db/nr-diamond-2018-03-05/nr --evalue 0.001 --out Hpan_1_diamond.xml --threads 8 --max-target-seqs 1 --outfmt 5 -more-sensitive &
+
+The above was run on CTAG, but the databases are on all the servers:
+ctag -- /dg
+watson and crick /db
+
+7. ANALYZE DIFFERENTIAL EXPRESSION:
+-First run RSEM + bowtie2 to perform the alignment of reads against the reference:
+
+#first
+
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/util/align_and_estimate_abundance.pl --transcripts Halichondria_panicea_trinity_preliminar.fasta --est_method RSEM --aln_method bowtie2 --trinity_mode --prep_reference --output_dir prep_ref
+
+
+#after for each sample separately (remember RSEM cannot take fastq.gz, you need to gunzip first).
+
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/util/align_and_estimate_abundance.pl --transcripts \
+Halichondria_panicea_trinity_preliminar.fasta --seqType fq --left /home/ana/RNASeq/AR_121016/VILLUM/CONCATENATED/Trinity/46a_S4_R1_paired.fastq \
+--right /home/ana/RNASeq/AR_121016/VILLUM/CONCATENATED/Trinity/46a_S4_R2_paired.fastq \
+--est_method RSEM --aln_method bowtie2 --trinity_mode --output_dir rsem_46a
+
+#or for all samples at the same time using a sample table:
+/usr/local/src/Trinity/trinityrnaseq-Trinity-v2.4.0/util/align_and_estimate_abundance.pl --transcripts trinity_Ephydatia_assembly.Trinity.fasta --seqType fq --samples_file /home/ana/RNASeq/CLIONA/rsem_cond_table_Cliona_good.txt --est_method RSEM --aln_method bowtie2 --trinity_mode --output_dir rsem_Cliona
+
+
+-Then perform differential expression analysis (with edgeR, DESeq2, etc):
+
+#First we make the matrix :
+
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/util/abundance_estimates_to_matrix.pl --est_method RSEM --out_prefix Ephydatia_final /home/ana/EPHYDATIA_COMPLETE/Apo_A1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/Apo_B1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/Apo_C1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/BAC_4hr_A1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/BAC_4hr_B1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/BAC_4hr_C1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/CHLO_4hr_A1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/CHLO_4hr_B1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/CHLO_4hr_C1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/HK_CHLO_4hr_A1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/HK_CHLO_4hr_B1_RSEM.genes.results /home/ana/EPHYDATIA_COMPLETE/HK_CHLO_4hr_C1_RSEM.genes.results &
+
+#then you will need to install packages from R to run DE with different methods: edgeR, DESeq2, limma, etc…
+
+#For downloading and installing packages into your home just type R 
+#Then it opens a screen automatically and put every package and enter (press a for all and y for yes during the procedure)  
+
+source("http://bioconductor.org/biocLite.R")
+#then depending on which method you want to use:
+  biocLite('edgeR')
+  biocLite('limma')
+  biocLite('DESeq2')
+  biocLite('ctc')
+  biocLite('Biobase')
+  biocLite(‘qvalue’)
+  install.packages('gplots')
+  install.packages('ape')
+#use mirror 124 (London).
+#then run:
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/run_DE_analysis.pl --matrix Ephydatia_final.counts.matrix --method edgeR --samples_file Ephy_sample_file.txt 
+
+#the previous script is written for edgeR but type whatever program you want to perform the analysis (edgeR, DESeq2, limma…etc)  
+#to have the heatmaps, sample correlation heat maps, etc, do the following, which will extract all genes that have P-values at most 1e-3 and are at least 2^2 fold differentially expressed. For each of the earlier pairwise DE comparisons, this step will generate the following files:
+
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/analyze_diff_expr.pl --matrix ../Ephydatia_final.TMM.EXPR.matrix -P 1e-3 -C 2 --samples ../Ephy_sample_file.txt  
+
+#to have the PCA:
+/usr/local/src/Trinity/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/PtR --matrix ../Ephydatia_final.TMM.EXPR.matrix --samples ../Ephy_sample_file.txt --log2 --prin_comp 3
+
